@@ -31,6 +31,9 @@
 //      (1.0 logit units when no refresh has been seen yet: a refresh the history has not seen is
 //      exactly what the practice punishes). Sigma is clamped to [0.35, 2.5]; quantiles are
 //      logit(r_hat) + z_tau * sigma at the standard normal levels, rounded to 4 decimals.
+//   6. Validation. Before anything is written, every forecast row is checked: five quantiles,
+//      each finite, non-decreasing, and inside [0, 100]. A row that fails names its trophy and
+//      aborts the run instead of shipping an unusable .out file.
 //
 // Everything is a pure function of the case file: sorted inputs, no clock, no randomness, no
 // network, so two runs write the same bytes. One case file in, one forecast file out.
@@ -319,6 +322,25 @@ function forecast(c: Case): Array<{ id: number; q: number[] }> {
   });
 }
 
+/** Check a forecast before it is written: five quantiles per trophy, each finite,
+ *  non-decreasing, and within [0, 100]. Throws naming the trophy on the first bad row,
+ *  so a broken forecast aborts the run instead of reaching the grader. */
+function validateForecast(caseId: string, trophies: Array<{ id: number; q: number[] }>): void {
+  for (const t of trophies) {
+    if (t.q.length !== LEVELS.length) {
+      throw new Error(`${caseId}: trophy ${t.id} has ${t.q.length} quantiles, expected ${LEVELS.length}`);
+    }
+    for (let k = 0; k < t.q.length; k++) {
+      const v = t.q[k];
+      if (!Number.isFinite(v)) throw new Error(`${caseId}: trophy ${t.id} quantile ${k} is not finite (${v})`);
+      if (v < 0 || v > 100) throw new Error(`${caseId}: trophy ${t.id} quantile ${k} out of range: ${v}`);
+      if (k > 0 && v < t.q[k - 1]) {
+        throw new Error(`${caseId}: trophy ${t.id} quantiles decrease at level ${k}: ${t.q[k - 1]} -> ${v}`);
+      }
+    }
+  }
+}
+
 mkdirSync(OUTPUT_DIR, { recursive: true });
 // Every case file, in name order, so two runs write the same bytes.
 const inputs = readdirSync(INPUT_DIR).filter((f) => f.endsWith('.in')).sort();
@@ -326,6 +348,7 @@ for (const file of inputs) {
   const id = file.slice(0, -'.in'.length);
   const c = JSON.parse(readFileSync(join(INPUT_DIR, file), 'utf8')) as Case;
   const trophies = forecast(c);
+  validateForecast(id, trophies);
   const out = `${JSON.stringify({ trophies })}\n`;
   if (Buffer.byteLength(out) > 65_536) throw new Error(`${id}.out would exceed 65,536 bytes`);
   writeFileSync(join(OUTPUT_DIR, `${id}.out`), out);
